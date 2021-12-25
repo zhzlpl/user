@@ -1,0 +1,844 @@
+local fakelag = {
+	lag = false,
+	update = 1,
+	dynamic_fl = {},
+}
+
+local weapon = {
+    "Auto",
+    "AWP",
+    "Scout",
+    "R8",
+    "Deagle",
+    "Other"
+}
+
+ffi.cdef[[
+    typedef void*(__thiscall* getNetChannel_t)(void*); // EngineClient 78
+    typedef void(__thiscall* set_timeout_t)(void*, float, bool); // NetChannel 31
+]]
+
+local fakelag_history = { [0] = 0, [1] = 0, [2] = 0}
+local fakelag_max = 0
+
+local aa_ifon = Menu.Switch("Anti-Aim", "Enable Anti Aim", false, "")
+
+local aamodes = Menu.Combo("Anti-Aim", "AA Modes", {"Anti Brute Force", "Sway Desync", "Smart", "Custom"}, 0, "Anti Aim Modes")
+
+local swayrange = Menu.SliderInt("Anti-Aim", "Max Range for Sway", 0, 0, 60)
+
+local lowdelta = Menu.Switch("Anti-Aim", "Low Delta", false, "")
+local legitaa = Menu.Switch("Anti-Aim", "Legit AA", false, "")
+local Slow_motion = Menu.Switch('Anti-Aim', "Slow motion", false)
+local limit_reference = Menu.SliderInt("Anti-Aim", "Slow motion limit", 1, 1, 60)
+
+local yawoffset_mode = Menu.Combo("AA Custom", "Yaw Offset Mode", {"Spin", "Random"}, 0)
+local spin_speed = Menu.SliderInt("AA Custom", "Spin Speed", 0, 0, 180)
+local yawffset_min = Menu.SliderInt("AA Custom", "Yaw Min", 0, -180, 180)
+local yawffset_max = Menu.SliderInt("AA Custom", "Yaw Max", 0, -180, 180)
+local modifier_mode = Menu.Combo("AA Custom", "Modifier Mode", {"Random"}, 0)
+local modifier_min = Menu.SliderInt("AA Custom", "Modifier Min", 0, -180, 180)
+local modifier_max = Menu.SliderInt("AA Custom", "Modifier Max", 0, -180, 180)
+local leftlimitmode = Menu.Combo("AA Custom", "Left Limit Mode", {"Random"},0)
+local leftlimitmin = Menu.SliderInt("AA Custom", "Left Limit Random Min", 0, 0, 60)
+local leftlimitmax = Menu.SliderInt("AA Custom", "Left Limit Random Max", 0, 0, 60)
+local rightlimitmode = Menu.Combo("AA Custom", "Right Limit Mode", {"Random"},0)
+local rightlimitmin = Menu.SliderInt("AA Custom", "Right Limit Random Min", 0, 0, 60)
+local rightlimitmax = Menu.SliderInt("AA Custom", "Right Limit Random Max", 0, 0, 60)
+local lby_mode = Menu.Combo("AA Custom", "LBY Mode", {"Random"}, 0)
+local lby_min = Menu.SliderInt("AA Custom", "LBY Min", 0, -60, 60)
+local lby_max = Menu.SliderInt("AA Custom", "LBY Max", 0, -60, 60)
+local lby_inv_min = Menu.SliderInt("AA Custom", "LBY Invert Min", 0, -60, 60)
+local lby_inv_max = Menu.SliderInt("AA Custom", "LBY Invert Max", 0, -60, 60)
+
+local dt_tick = Menu.SliderInt("Doubletap", "Shift", 19, 10, 20, "Null")
+Menu.Text("Doubletap", "                                DT Indicator")
+local color = Menu.SwitchColor("Doubletap", "Color", false, Color.new(1.0, 1.0, 1.0, 1.0))
+local blur = Menu.Switch("Doubletap", "Blur", false)
+local alpha = Menu.SliderInt("Doubletap", "Alpha", 100, 0, 255)
+
+
+local fakelag_dynamic = Menu.Switch("Fake Lag", "Enabled Dynamic Choked Fakelag", false)
+for i = 1, 6 do
+    fakelag.dynamic_fl[i] = {
+        limit = Menu.SliderInt("Fake Lag", "Dynamic Fakelag Limit" .. "[" .. i .. "]", 14, 0, 14),
+        randomized = Menu.SliderInt("Fake Lag", "Dynamic Fakelag Randomized" .. "[" .. i .. "]", 0, 0, 14)
+    }
+end
+
+local keysswitch = Menu.Switch('Misc', "Keybinds", false)
+
+local third_pos = Menu.FindVar("Visuals", "View", "Thirdperson", "Enable Thirdperson")
+local screen_size = EngineClient.GetScreenSize()
+local font1 = Render.InitFont("Arial", 20 )
+local font2 = Render.InitFont("tahoma Bold", 10)
+local font3 = Render.InitFont("smallest pixel-7", 10)
+local font4 = Render.InitFont("ebrima Bold", 13)
+local ref_baim = Menu.FindVar("Aimbot", "Ragebot", "Misc", "Body Aim")
+local DT = Menu.FindVar("Aimbot", "Ragebot", "Exploits", "Double Tap")
+local os_pos = Menu.FindVar("Aimbot", "Ragebot", "Exploits", "Hide Shots")
+local dt_pos = Menu.FindVar("Aimbot", "Ragebot", "Exploits", "Double Tap")
+local baim_store = ref_baim:Get()
+local DTstatus = ""
+local CanShoot = ""
+local r, g, b
+
+local font = Render.InitFont("Tahoma Bold", 10) 
+local fontbullet = Render.InitFont("bullet", 17);
+
+local animations = {
+	-- vars
+	speed = 4.0,
+	stored_values = {},
+	active_this_frame = {},
+	prev_realtime = GlobalVars.realtime,
+    realtime = GlobalVars.realtime,
+    multiplier = 0.0,
+
+	-- Utils
+    clamp = function(v, min, max)
+		return ((v > max) and max) or ((v < min) and min or v)
+	end,
+
+	-- internal stuff
+    new_frame = function(self)
+    	self.prev_realtime = self.realtime
+        self.realtime = GlobalVars.realtime
+        self.multiplier = (self.realtime - self.prev_realtime) * self.speed
+        
+        for k, v in pairs(self.stored_values) do
+            if self.active_this_frame[k] ~= nil then goto continue end
+			self.stored_values[k] = nil
+			::continue::
+        end
+
+        self.active_this_frame = {}
+    end,
+    reset = function(self, name)
+        self.stored_values[name] = nil
+    end,
+    
+    -- animator
+    animate = function (self, name, decrement, max_value)
+        max_value = max_value or 1.0
+		decrement = decrement or false
+
+        local frames = self.multiplier * (decrement and -1 or 1)
+
+		local v = self.clamp(self.stored_values[name] and self.stored_values[name] or 0.0, 0.0, max_value) 
+        v = self.clamp(v + frames, 0.0, max_value)
+
+        self.stored_values[name] = v
+        self.active_this_frame[name] = true
+
+        return v
+    end
+}
+
+local function select_combo(path, need)
+    if path:GetInt() == need then return true else return false end
+end
+
+
+local setup_Menu = function()
+    limit_reference:SetVisible(Slow_motion:GetBool())
+    if aamodes:GetInt() ~= 1 then swayrange:SetVisible(false) else swayrange:SetVisible(true) end
+    local boolofaa = aamodes:GetInt() == 3
+    yawoffset_mode:SetVisible(boolofaa)
+    modifier_mode:SetVisible(boolofaa)
+    modifier_min:SetVisible(boolofaa)
+    modifier_max:SetVisible(boolofaa)
+    lby_mode:SetVisible(boolofaa)
+    lby_min:SetVisible(boolofaa)
+    lby_max:SetVisible(boolofaa)
+    lby_inv_min:SetVisible(boolofaa)
+    lby_inv_max:SetVisible(boolofaa)
+    rightlimitmode:SetVisible(boolofaa)
+    rightlimitmin:SetVisible(boolofaa)
+    rightlimitmax:SetVisible(boolofaa)
+    leftlimitmode:SetVisible(boolofaa)
+    leftlimitmin:SetVisible(boolofaa)
+    leftlimitmax:SetVisible(boolofaa)
+
+    if modifier_max:GetInt() < modifier_min:GetInt() then
+        modifier_max:SetInt(modifier_min:GetInt())
+    end
+
+    if rightlimitmax:GetInt() < rightlimitmin:GetInt() then
+        rightlimitmax:SetInt(rightlimitmin:GetInt())
+    end
+    if leftlimitmax:GetInt() < leftlimitmin:GetInt() then
+        leftlimitmax:SetInt(leftlimitmin:GetInt())
+    end
+    if lby_max:GetInt() < lby_min:GetInt() then
+        lby_max:SetInt(lby_min:GetInt())
+    end
+    if lby_inv_max:GetInt() < lby_inv_min:GetInt() then
+        lby_inv_max:SetInt(lby_inv_min:GetInt())
+    end
+    if yawoffset_mode:GetInt() == 0 then
+        spin_speed:SetVisible(boolofaa)
+        else
+        spin_speed:SetVisible(false)
+    end
+    if yawoffset_mode:GetInt() == 1 then
+        yawffset_min:SetVisible(boolofaa)
+        yawffset_max:SetVisible(boolofaa)
+        if yawffset_max:GetInt() < yawffset_min:GetInt() then
+            yawffset_max:SetInt(yawffset_min:GetInt())
+        end
+    else
+        yawffset_min:SetVisible(false)
+        yawffset_max:SetVisible(false)
+    end
+
+    for i = 1,6 do
+        fakelag.dynamic_fl[i].limit:SetVisible(fakelag_dynamic:GetBool())
+        fakelag.dynamic_fl[i].randomized:SetVisible(fakelag_dynamic:GetBool())
+    end
+end
+
+
+local function normalize_yaw(yaw)
+	while yaw > 180 do yaw = yaw - 360 end
+	while yaw < -180 do yaw = yaw + 360 end
+	return yaw
+end
+
+local canshoot = function()
+	local player = EntityList.GetClientEntity(EngineClient.GetLocalPlayer())
+	local local_player = player:GetPlayer()
+	local local_player_weapon = local_player:GetActiveWeapon()
+	if local_player == nil then return false end
+	if local_player_weapon == nil then return false end
+	--[[if local_player:GetProp("m_flNextAttack") <= GlobalVars.curtime then
+		return true
+	end]]
+	if local_player_weapon:GetProp("m_flNextPrimaryAttack") <= GlobalVars.curtime then
+		return true
+	end
+	return false
+end
+
+local dt = function()
+	Exploits.OverrideDoubleTapSpeed(dt_tick:GetInt())
+	Exploits.AllowCharge(canshoot())
+end
+
+local sc = EngineClient.GetScreenSize()
+local dtX = 20
+local dtY = 500
+local BindsX = sc.x/2 + sc.x/4
+local BindsY = sc.y/2 - sc.y/6
+local dtDrag = true
+local BindsDrag = false
+local keysList = {
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+}
+local dt_indicator = function()
+    r = (math.floor(math.sin(GlobalVars.realtime * 1) * 127 + 128)) / 1000 * 3.92
+	g = (math.floor(math.sin(GlobalVars.realtime * 1 + 2) * 127 + 128)) / 1000 * 3.92
+	b = (math.floor(math.sin(GlobalVars.realtime * 1 + 4) * 127 + 128)) / 1000 * 3.92
+	a = alpha:GetInt()/255
+
+    if not DT:GetBool() then return end
+    local player = EntityList.GetClientEntity(EngineClient.GetLocalPlayer())
+	if player == nil then return end
+	if Exploits.GetCharge() < 1 then
+		DTstatus = " [CHARGE:" .. string.format("%.f %%", Exploits.GetCharge() * 100) .. "]"
+	else
+		DTstatus = " [READY]"
+	end
+	text_size = Render.CalcTextSize("DT" .. DTstatus, 11)
+	text_size_2 = Render.CalcTextSize("| tickbase: " .. tostring(dt_tick:GetInt()), 11)
+	if color:GetBool() == true then
+	Render.GradientBoxFilled(Vector2.new(dtX, dtY), Vector2.new(dtX + 20 + text_size.x + text_size_2.x, dtY + 2), color:GetColor(),color:GetColor(),color:GetColor(),color:GetColor())
+	else 
+	Render.GradientBoxFilled(Vector2.new(dtX, dtY), Vector2.new(dtX + 20 + text_size.x + text_size_2.x, dtY + 2), Color.new(r,g,b,1.0),Color.new(g,b,r,1.0),Color.new(r,g,b,1.0),Color.new(g,b,r,1.0))
+	end	
+    if blur:GetBool() then Render.Blur(Vector2.new(dtX, dtY + 2), Vector2.new(dtX + 20 + text_size.x + text_size_2.x, dtY + 19)) end
+	Render.BoxFilled(Vector2.new(dtX, dtY + 2), Vector2.new(dtX + 20 + text_size.x + text_size_2.x, dtY + 19), Color.new(0,0,0,a))
+	Render.Text("DT" .. DTstatus, Vector2.new(dtX + 4, dtY + 4), Color.new(1, 1, 1, 1), 11)
+	
+	text_size = Render.CalcTextSize("DT" .. DTstatus, 11)
+	Render.Text("| tickbase: " .. tostring(dt_tick:GetInt()), Vector2.new(dtX + 7 + text_size.x, dtY + 4), Color.new(1, 1, 1, 1), 11)
+
+	local player = EntityList.GetClientEntity(EngineClient.GetLocalPlayer())
+	local local_player = player:GetPlayer()
+	local local_player_weapon = local_player:GetActiveWeapon()
+	local health = player:GetProp("m_iHealth")
+	if health > 0 then
+	if local_player_weapon == nil then return end
+	local WeaponID = EntityList.GetClientEntity(EngineClient.GetLocalPlayer()):GetPlayer():GetActiveWeapon():GetWeaponID()
+		if WeaponID ~= nil then
+        Render.WeaponIcon(WeaponID, Vector2.new(dtX + 2, dtY + 22), Color.new(1.0, 1.0, 1.0), 14)
+    	end
+	end
+
+	local player = EntityList.GetClientEntity(EngineClient.GetLocalPlayer())
+	local local_player = player:GetPlayer()
+	local health = player:GetProp("m_iHealth")
+	if health > 0 then
+		local WeaponID = EntityList.GetClientEntity(EngineClient.GetLocalPlayer()):GetPlayer():GetActiveWeapon():GetWeaponID()
+		local Weapon = EntityList.GetClientEntity(EngineClient.GetLocalPlayer()):GetPlayer():GetActiveWeapon()
+		local icon_size = Render.CalcWeaponIconSize(WeaponID, 14)
+		if Weapon:IsGrenade() == true or Weapon:IsKnife() == true or WeaponID == 64 or WeaponID == 31 or WeaponID == 49 then return end
+		animations:new_frame()
+		local should_decrement = not canshoot()
+    	local alpha = animations:animate("testing", should_decrement)
+    	if alpha == 0.0 then return end
+		if canshoot() == true then
+            Render.Text("A", Vector2.new(dtX + 2 + alpha*2 + icon_size.x, dtY + 22) , Color.new(1, 1, 1, alpha), 17, fontbullet);
+		end
+
+		animations:new_frame()
+		local should_decrement = not canshoot()
+    	local alpha = animations:animate("testing", should_decrement)
+    	if alpha == 0.0 then return end
+		if WeaponID == 9 or WeaponID == 40 then return end
+		if canshoot() == true and Exploits.GetCharge() == 1 then
+            Render.Text("A", Vector2.new(dtX + 10 + alpha*2 + icon_size.x, dtY + 22) , Color.new(1, 1, 1, alpha), 17, fontbullet);
+		end
+    end
+    local is_key_pressed = Cheat.IsKeyDown(0x1)
+    if is_key_pressed then
+        local mouse = Cheat.GetMousePos()
+        if dtDrag == true then
+            dtX = mouse.x
+            dtY = mouse.y
+        end
+        if mouse.x >= dtX and mouse.y >= dtY and mouse.x <= dtX + 200 and mouse.y <= dtY + 20 then 
+            if BindsDrag == false then dtDrag = true end
+        end
+    else
+        dtDrag = false
+    end
+end
+
+local keybindsList = function()
+    local binds = Cheat.GetBinds()
+    if #binds > 0 or Cheat.IsMenuVisible() then
+        for i = 1, #binds do
+            if binds[i]:IsActive() then
+                if keysList[i] < 255 then keysList[i] = keysList[i] + 5 else keysList[i] = 255 end
+            else
+                if keysList[i] > 0 then keysList[i] = keysList[i] - 5 else keysList[i] = 0 end
+            end
+                local ts = Render.CalcTextSize(binds[i]:GetValue(), 14)
+                local sc = EngineClient.GetScreenSize()
+                Render.Text(binds[i]:GetName(), Vector2.new(BindsX - 90, BindsY + i * math.min(17, keysList[i])), Color.new(1.0, 1.0, 1.0, keysList[i]/255), 14)
+                if string.len(binds[i]:GetValue()) > 10 then
+                    local a = -string.len(binds[i]:GetValue()) + 10
+                    fs = Render.CalcTextSize(binds[i]:GetValue():sub(0,a), 14)
+                    Render.Text(binds[i]:GetValue():sub(0,a) .. "..", Vector2.new(BindsX + 90 - fs.x, BindsY + i * math.min(17, keysList[i])), Color.new(1.0, 1.0, 1.0, keysList[i]/255), 14)
+                else 
+                    fs = Render.CalcTextSize(binds[i]:GetValue(), 14)
+                    Render.Text(binds[i]:GetValue(), Vector2.new(BindsX + 90 - fs.x, BindsY + i * math.min(17, keysList[i])), Color.new(1.0, 1.0, 1.0, keysList[i]/255), 14)
+                end
+        end
+        local sc = EngineClient.GetScreenSize()
+        local ts = Render.CalcTextSize('Keybinds', 16)
+        Render.GradientBoxFilled(Vector2.new(BindsX-120, BindsY + 0 * 17), Vector2.new(BindsX, BindsY + 0 * 17+ts.y), Color.new(0, 0, 0, 0), Color.new(0, 0, 0, 0.5), Color.new(0, 0, 0, 0), Color.new(0, 0, 0, 0.5))
+        Render.GradientBoxFilled(Vector2.new(BindsX, BindsY + 0 * 17), Vector2.new(BindsX + 120, BindsY + 0 * 17+ts.y), Color.new(0, 0, 0, 0.5), Color.new(0, 0, 0, 0), Color.new(0, 0, 0, 0.5), Color.new(0, 0, 0, 0))
+        Render.Text("Keybinds", Vector2.new(BindsX - ts.x/2, BindsY + 0 * 17), Color.new(1.0, 1.0, 1.0, 1.0), 16)
+        local is_key_pressed = Cheat.IsKeyDown(0x1)
+        if is_key_pressed then
+            local mouse = Cheat.GetMousePos()
+            local ts = Render.CalcTextSize("Keybinds", 16)
+            if BindsDrag == true then
+                BindsX = mouse.x
+                BindsY = mouse.y
+            end
+            if mouse.x >= BindsX - 120 and mouse.y >= BindsY and mouse.x <= BindsX - 120 + 240 and mouse.y <= BindsY + ts.y then
+                if dtDrag == false then BindsDrag = true end
+            end
+        else
+            BindsDrag = false
+        end
+    end
+end
+
+local third_indicator = function()
+    local entity = EntityList.GetClientEntity(EngineClient.GetLocalPlayer())
+    if entity == nil then return end
+    local player = entity:GetPlayer()
+    local player_weapon = player:GetActiveWeapon()
+    if player_weapon == nil then return end
+    local weapon_id = player_weapon:GetWeaponID()
+    local weapon_size = Render.CalcWeaponIconSize(weapon_id, 14)
+    local player_pos = player:GetHitboxCenter(3)
+    local screen_pos = Render.ScreenPosition(player_pos)
+    local local_vec = player:GetProp("m_vecOrigin")
+    local view_angles = EngineClient.GetViewAngles()
+    local delay = 32
+    local tickcount = GlobalVars.tickcount
+    local desyncdelta = 0
+
+    if GlobalVars.tickcount > tickcount - delay then
+        desyncdelta = math.min(math.abs(normalize_yaw(AntiAim.GetCurrentRealRotation() - AntiAim.GetFakeRotation())) / 2, 60)
+    end
+    local yaw = normalize_yaw(view_angles.yaw - AntiAim.GetCurrentRealRotation() -  120)
+    local fakeyaw = normalize_yaw(view_angles.yaw - AntiAim.GetFakeRotation() - 120)
+    local choked = ClientState.m_choked_commands
+
+    local os_state = "off"
+    local os_color = Color.new(1.0, 0.0, 0.0, 1.0)
+    local dt_state = "off"
+    local dt_color = Color.new(1.0, 0.0, 0.0, 1.0)
+
+    if os_pos:GetBool() == true then os_state = "on" ; os_color = Color.new(0.0, 1.0, 0.0, 1.0) else os_state = "off" ; os_color = Color.new(1.0, 0.0, 0.0, 1.0) end
+    if dt_pos:GetBool() == true then dt_state = "on"; dt_color = Color.new(0.0, 1.0, 0.0, 1.0) else dt_state = "off" ; dt_color = Color.new(1.0, 0.0, 0.0, 1.0) end
+            
+    local top_color = Color.RGBA(127, 127, 229, 229)
+    local tr, tb, tg, ta = top_color.r, top_color.g ,top_color.b, top_color.a
+    if third_pos:GetBool() == true then
+    Render.Line(screen_pos, Vector2.new(screen_pos.x + 70, screen_pos.y + 29), Color.new(0.9, 0.9, 0.9, 0.6))
+    Render.Blur(Vector2.new(screen_pos.x + 70, screen_pos.y + 30), Vector2.new(screen_pos.x + 220, screen_pos.y - 30))
+    Render.BoxFilled(Vector2.new(screen_pos.x + 70, screen_pos.y + 30), Vector2.new(screen_pos.x + 220, screen_pos.y - 30), Color.new(0.0, 0.0, 0.0, 0.3))
+    Render.GradientBoxFilled(Vector2.new(screen_pos.x + 70, screen_pos.y + 30), Vector2.new(screen_pos.x + 220, screen_pos.y - 30 + 30*ta), top_color, top_color, Color.new(tr, tb, tg, 0.0), Color.new(tr, tb, tg, 0.0))
+    --Render.Text("Danko.Yaw", Vector2.new(screen_pos.x + 77, screen_pos.y - 25), Color.RGBA(10,10,10,250), 10, font3)
+    --Render.Text("Danko.Yaw", Vector2.new(screen_pos.x + 76, screen_pos.y - 26), Color.new(1.0, 1.0, 1.0, 1.0), 10, font3)
+    Render.Text("FAKE ( "..string.format("%.1f", desyncdelta).."°".." )", Vector2.new(screen_pos.x + 87, screen_pos.y - 14), Color.RGBA(10,10,10,250), 13, font4)
+    Render.Text("FAKE ( "..string.format("%.1f", desyncdelta).."°".." )", Vector2.new(screen_pos.x + 86, screen_pos.y - 15), Color.new(1.0, 1.0, 1.0, 1.0), 13, font4)
+    Render.GradientBoxFilled(Vector2.new(screen_pos.x + 76, screen_pos.y - 3 - (math.floor(desyncdelta)/60 * 10)), Vector2.new(screen_pos.x + 80, screen_pos.y - 3), Color.new(1.0, 1.0, 1.0, 0.0), Color.new(1.0, 1.0, 1.0, 0.0), Color.new(1.0, 1.0, 1.0, 1.0), Color.new(1.0, 1.0, 1.0, 1.0))
+    Render.Text("FL  "..fakelag_history[0].."-"..fakelag_history[1].."-"..fakelag_history[2], Vector2.new(screen_pos.x + 87, screen_pos.y + 1 ), Color.RGBA(10,10,10,250), 13, font4)
+    Render.Text("FL  "..fakelag_history[0].."-"..fakelag_history[1].."-"..fakelag_history[2], Vector2.new(screen_pos.x + 86, screen_pos.y ), Color.new(1.0, 1.0, 1.0, 1.0), 13, font4)
+    Render.GradientBoxFilled(Vector2.new(screen_pos.x + 76, screen_pos.y + 12 - (math.floor(choked)/14 * 10)), Vector2.new(screen_pos.x + 80, screen_pos.y + 12), Color.new(1.0, 1.0, 1.0, 0.0), Color.new(1.0, 1.0, 1.0, 0.0), Color.new(1.0, 1.0, 1.0, 1.0), Color.new(1.0, 1.0, 1.0, 1.0))
+    Render.CircleFilled(Vector2.new(screen_pos.x + 80, screen_pos.y + 21), 2.0, 30, os_color)
+    Render.Text("os:", Vector2.new(screen_pos.x + 89, screen_pos.y + 17), Color.RGBA(10,10,10,250), 10, font3)
+    Render.Text("   "..os_state, Vector2.new(screen_pos.x + 89, screen_pos.y + 17), Color.RGBA(10,10,10,250), 10, font3)
+    Render.Text("os:", Vector2.new(screen_pos.x + 88, screen_pos.y + 16), Color.new(1.0, 1.0, 1.0, 1.0), 10, font3)
+    Render.Text("   "..os_state, Vector2.new(screen_pos.x + 88, screen_pos.y + 16), os_color, 10, font3)
+    Render.Text("|", Vector2.new(screen_pos.x + 120, screen_pos.y + 16), Color.new(1.0, 1.0, 1.0, 1.0), 10, font3)
+    Render.CircleFilled(Vector2.new(screen_pos.x + 125, screen_pos.y + 21), 2.0, 30, dt_color)
+    Render.Text("DT:", Vector2.new(screen_pos.x + 134, screen_pos.y + 17), Color.RGBA(10,10,10,250), 10, font3)
+    Render.Text("   "..dt_state,  Vector2.new(screen_pos.x + 134, screen_pos.y + 17), Color.RGBA(10,10,10,250), 10, font3)
+    Render.Text("DT:", Vector2.new(screen_pos.x + 133, screen_pos.y + 16), Color.new(1.0, 1.0, 1.0, 1.0), 10, font3)
+    Render.Text("   "..dt_state,  Vector2.new(screen_pos.x + 133, screen_pos.y + 16), dt_color, 10, font3)
+    Render.Circle(Vector2.new(screen_pos.x + 190, screen_pos.y - 6), 10.0, 58, Color.new(0.0, 0.0, 0.0, 0.6), 2.0)
+    Render.Circle(Vector2.new(screen_pos.x + 190, screen_pos.y - 6), 10, 58, Color.new(1.0, 1.0, 1.0, 1.0), 2.0, fakeyaw, fakeyaw + math.floor(desyncdelta-2))
+    Render.Circle(Vector2.new(screen_pos.x + 190, screen_pos.y - 6), 10, 58, Color.new(1.0, 1.0, 1.0, 1.0), 2.0, yaw, yaw + 56)
+    Render.WeaponIcon(weapon_id, Vector2.new(screen_pos.x + 192 - (weapon_size.x/2), screen_pos.y + 12), Color.new(1.0, 1.0, 1.0, 1.0), 14)
+    end
+end
+
+local alpha = {
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+}
+local indicator = function()
+    local choke = ClientState.m_choked_commands
+    local desyncdelta = math.abs( normalize_yaw(AntiAim.GetCurrentRealRotation() - AntiAim.GetFakeRotation())) / 2
+    local table = 0
+    local doubleTap = Menu.FindVar("Aimbot", "Ragebot", "Exploits", "Double Tap")
+    local hideshots = Menu.FindVar("Aimbot", "Ragebot", "Exploits", "Hide Shots")
+    local fakeduck = Menu.FindVar("Aimbot", "Anti Aim", "Misc", "Fake Duck")
+    --Render.Text(".YAW", Vector2.new(sc.x/2 + 145, sc.y/2 + 10), Color.new(1.0, 1.0, 1.0, 1.0), 16)
+    --Render.Text("Danko", Vector2.new(sc.x/2 + 100, sc.y/2 + 10), Color.new(0.5, 0.5, 1.0, 1.0), 16)
+    Render.GradientBoxFilled(Vector2.new(sc.x/2 + 101, sc.y/2 + 26) ,Vector2.new(sc.x/2 + 101 + 80* desyncdelta/60, sc.y/2 + 28), Color.new(0.5, 0.5, 1.0, 1.0), desyncdelta > 30 and Color.new(desyncdelta/60, desyncdelta/60, 1.0, 1.0) or Color.new(0.5, 0.5, 1.0, 1.0), Color.new(0.5, 0.5, 1.0, 1.0), desyncdelta > 30 and Color.new(desyncdelta/60, desyncdelta/60, 1.0, 1.0) or Color.new(0.5, 0.5, 1.0, 1.0))
+
+    local y = sc.y/2 + 29
+    if hideshots:GetBool() then
+        if alpha[2] < 255 then alpha[2] = alpha[2] + 5 else alpha[2] = 255 end
+        text = 'ONSHOT'
+        Render.Text(tostring(text), Vector2.new(sc.x/2 + 101, y + math.min(10, alpha[2]/10) * table), Color.new(152/255, 240/255, 16/255, alpha[2]/255), 10, font)
+        table = table + math.min(1, alpha[2] /10)
+
+    else
+        if alpha[2] > 0 then alpha[2] = alpha[2] - 5 else alpha[2] = 0 end
+        text = 'ONSHOT'
+        Render.Text(tostring(text), Vector2.new(sc.x/2 + 101, y + math.min(10, alpha[2]/10) * table), Color.new(152/255, 240/255, 16/255, alpha[2]/255), 10, font)
+        table = table + math.max(0, math.min(1, alpha[2] /10))
+    end
+    if fakeduck:GetBool() then
+        if alpha[3] < 255 then alpha[3] = alpha[3] + 5 else alpha[3] = 255 end
+        text = 'DUCK'
+        Render.Text(tostring(text), Vector2.new(sc.x/2 + 101, y + math.min(10, alpha[3]/10) * table), Color.new(1, 1, 1, alpha[3]/255), 10, font)
+        table = table + math.min(1, alpha[3] /10)
+    else
+        if alpha[3] > 0 then alpha[3] = alpha[3] - 5 else alpha[3] = 0 end
+        text = 'DUCK'
+        Render.Text(tostring(text), Vector2.new(sc.x/2 + 101, y + math.min(10, alpha[3]/10) * table), Color.new(1, 1, 1, alpha[3]/255), 10, font)
+        table = table + math.max(0, math.min(1, alpha[3] /10))
+    end
+    if doubleTap:GetBool() then
+        if alpha[1] < 255 then alpha[1] = alpha[1] + 5 else alpha[1] = 255 end
+        local chrg = Exploits.GetCharge()
+        text = 'DT'
+        Render.Text(tostring(text), Vector2.new(sc.x/2 + 101, y + math.min(10, alpha[1]/10) * table), Color.new(1- 0.9* chrg, 0.9* chrg, 40/255, alpha[1]/255), 10, font)
+        table = table + math.min(1, alpha[1] /10)
+    else
+        if alpha[1] > 0 then alpha[1] = alpha[1] - 5 else alpha[1] = 0 end
+        text = 'DT'
+        Render.Text(tostring(text), Vector2.new(sc.x/2 + 101, y + math.min(10, alpha[1]/10) * table), Color.new(152/255, 240/255, 16/255, alpha[1]/255), 10, font)
+        table = table + math.max(0, math.min(1, alpha[1] /10))
+    end
+end
+
+local fakelag = function()
+    local limit_ref = Menu.FindVar("Aimbot", "Anti Aim", "Fake Lag", "Limit")
+    local randomize_ref = Menu.FindVar("Aimbot", "Anti Aim", "Fake Lag", "Randomization")
+    if ClientState.m_choked_commands == 0 then
+		fakelag.lag = not fakelag.lag
+		fakelag.update = fakelag.update + 1
+		if fakelag.update >= 7 then
+			fakelag.update = 1
+		end
+	end
+
+	if fakelag_dynamic:GetBool() then
+		limit_ref:SetInt(fakelag.dynamic_fl[fakelag.update].limit:GetInt())
+		randomize_ref:SetInt(fakelag.dynamic_fl[fakelag.update].randomized:GetInt())
+	end
+end
+
+local function modify_velocity(cmd, goalspeed)
+	if goalspeed <= 0 then
+		return
+	end
+	
+	local minimalspeed = math.sqrt((cmd.forwardmove * cmd.forwardmove) + (cmd.sidemove * cmd.sidemove))
+	
+	if minimalspeed <= 0 then
+		return
+	end
+	
+	if cmd.in_duck == 1 then
+		goalspeed = goalspeed * 2.94110647
+	end
+	
+	if minimalspeed <= goalspeed then
+		return
+	end
+	
+	local speedfactor = goalspeed / minimalspeed
+	cmd.forwardmove = cmd.forwardmove * speedfactor
+	cmd.sidemove = cmd.sidemove * speedfactor
+end
+
+local setLegitOptions = false
+local LegitAA = function(cmd)
+    local ents = EntityList.GetEntitiesByClassID(129)
+    local hosts = EntityList.GetEntitiesByClassID(97)
+    if ents[1] ~= nil or ents[0] ~= nil then
+        for i = 1, #ents do
+            local localplayer = EntityList.GetClientEntity(EngineClient.GetLocalPlayer())
+            local position = ents[i]:GetProp("DT_BaseEntity", "m_vecOrigin")
+            local origin = localplayer:GetPlayer():GetEyePosition()
+            local vec = Vector.new(origin.x, origin.y, origin.z)
+            local distance = vec:DistTo(position)
+            if distance > 100 then
+                cmd.buttons = bit.band(cmd.buttons, bit.bnot(32))
+            end
+        end
+    elseif hosts[1] ~= nil then
+        for f = 1, #hosts do
+            if f > 1 then
+                local localplayer = EntityList.GetClientEntity(EngineClient.GetLocalPlayer())
+                local position = hosts[f]:GetProp("DT_BaseEntity", "m_vecOrigin")
+                local position2 = hosts[f-1]:GetProp("DT_BaseEntity", "m_vecOrigin")
+                local origin = localplayer:GetPlayer():GetEyePosition()
+                local vec = Vector.new(origin.x, origin.y, origin.z)
+                local distance = vec:DistTo(position)
+                local distance2 = vec:DistTo(position2)
+                if distance > 100 and distance2 > 100 then
+                    cmd.buttons = bit.band(cmd.buttons, bit.bnot(32))
+                end
+            end
+        end
+    else
+        cmd.buttons = bit.band(cmd.buttons, bit.bnot(32))
+    end
+    if setLegitOptions == false then
+        local FakeOptions = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Fake Options")
+        local LBYMode = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "LBY Mode")
+        local freestandDesync = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Freestanding Desync")
+        local DesyncOnShot = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Desync On Shot")
+        FakeOptions:SetInt(8)
+        LBYMode:SetInt(1)
+        freestandDesync:SetInt(0)
+        DesyncOnShot:SetInt(0)
+        setLegitOptions = true
+    end
+    if AntiAim.GetInverterState() then
+        AntiAim.OverrideLBYOffset(-60)
+    else
+        AntiAim.OverrideLBYOffset(60)
+    end
+    AntiAim.OverrideYawOffset(180.0)
+    AntiAim.OverrideLimit(60)
+    AntiAim.OverridePitch(0.0)
+end
+
+Cheat.RegisterCallback("draw",function()
+    local IsConnected = EngineClient.IsConnected()
+    local entity = EntityList.GetClientEntity(EngineClient.GetLocalPlayer())
+    setup_Menu()
+    dt_indicator()
+ 
+    if aa_ifon:GetBool() and IsConnected and entity ~= nil then indicator() end
+    if keysswitch:GetBool() then keybindsList() end
+    if fakelag_dynamic:GetBool() then fakelag() end
+end)
+
+local sp = 0
+function spin(speed)
+    sp = sp + speed
+    if sp >= 180 then
+        sp = -180 + (180 - sp)
+    end
+    return sp
+end
+
+Cheat.RegisterCallback("createmove",function(cmd)
+    local me = EntityList.GetClientEntity(EngineClient.GetLocalPlayer()):GetPlayer()
+    if me:GetProp("m_iHealth") <= 0 then return end 
+
+    --
+
+    local yawnumber_get, modifier_get = Menu.FindVar("Aimbot", "Anti Aim", "Main", "Yaw Add"), Menu.FindVar("Aimbot", "Anti Aim", "Main", "Modifier Degree")
+    local rightlimit, leftlimit = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Right Limit"), Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Left Limit")
+    local antiaimfakeoptions = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Fake Options")
+    local antiaiminverter = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Inverter")
+
+    --
+
+    local weap = me:GetActiveWeapon()
+    local WEAPON_SSG08 = 40
+    local WEAPON_SCAR20 = 38
+    local WEAPON_G3SG1 = 11
+    local WEAPON_AWP = 9
+    if weap == nil then return end
+    local weapon_id = weap:GetWeaponID()
+    local player = EntityList.GetLocalPlayer()
+
+    --
+
+    local choked = ClientState.m_choked_commands
+
+    fakelag_max = math.max(fakelag_max, choked)
+    if GlobalVars.tickcount % 16 == 0 then
+        table.insert(fakelag_history,0,fakelag_max)
+        fakelag_max = 0
+    end
+    if #fakelag_history > 4 then
+        table.remove(fakelag_history)
+    end
+
+    --
+
+    if Slow_motion:GetBool() then
+		modify_velocity(cmd, limit_reference:GetInt())
+	end
+
+    if aa_ifon:GetBool() then
+        if aamodes:GetInt() == 0 then 
+            leftlimit:SetInt(60)
+            rightlimit:SetInt(60)
+            yawnumber_get:SetInt(0)
+            antiaimfakeoptions:SetInt(8)
+        end
+        if aamodes:GetInt() == 1 then 
+            yawnumber_get:SetInt(0)
+            leftlimit:SetInt(math.random(0, swayrange:GetInt()))
+            rightlimit:SetInt(math.random(0, swayrange:GetInt()))
+        end
+        if aamodes:GetInt() == 2 then 
+            leftlimit:SetInt(37)
+            rightlimit:SetInt(37)
+            yawnumber_get:SetInt(0)
+            antiaimfakeoptions:SetInt(9)
+            if (player:GetProp("m_iHealth") <= 10) then
+                leftlimit:SetInt(17)
+                rightlimit:SetInt(17)
+            end
+            if weapon_id == WEAPON_SSG08 then
+                leftlimit:SetInt(37)
+                rightlimit:SetInt(37)
+                antiaimfakeoptions:SetInt(3)
+            end
+            if weapon_id == WEAPON_SCAR20 then
+                leftlimit:SetInt(29)
+                rightlimit:SetInt(21)
+                antiaimfakeoptions:SetInt(3)
+            end
+            if weapon_id == WEAPON_G3SG1 then
+                leftlimit:SetInt(29)
+                rightlimit:SetInt(21)
+                antiaimfakeoptions:SetInt(3)
+            end
+            if weap:IsPistol() then
+                leftlimit:SetInt(32)
+                rightlimit:SetInt(35)
+                antiaimfakeoptions:SetInt(3)
+            end
+            if weap:IsPistol() then
+                if (player:GetProp("m_iHealth") <= 50) then
+                    leftlimit:SetInt(17)
+                    rightlimit:SetInt(17)
+                    antiaimfakeoptions:SetInt(8)
+                end
+            end
+            if weapon_id == WEAPON_AWP then
+                leftlimit:SetInt(37)
+                rightlimit:SetInt(37)
+                antiaimfakeoptions:SetInt(9)
+            end
+        end
+        if aamodes:GetInt() == 3 then
+            if yawoffset_mode:GetInt() == 0 then
+                yawnumber_get:SetInt(spin(spin_speed:GetInt()))
+            end
+            if yawoffset_mode:GetInt() == 1 then
+                yawnumber_get:SetInt(Utils.RandomInt(yawffset_min:GetInt(),yawffset_max:GetInt()))
+            end
+            if modifier_mode:GetInt() == 0 then
+                modifier_get:SetInt(Utils.RandomInt(modifier_min:GetInt(),modifier_max:GetInt()))
+            end
+            if rightlimitmode:GetInt() == 0 then
+                rightlimit:SetInt(Utils.RandomInt(rightlimitmin:GetInt(),rightlimitmax:GetInt()))
+            end
+            if leftlimitmode:GetInt() == 0 then
+                leftlimit:SetInt(Utils.RandomInt(leftlimitmin:GetInt(),leftlimitmax:GetInt()))
+            end
+            if lby_mode:GetInt() == 0 then
+                if antiaiminverter == false then
+                    AntiAim.OverrideLBYOffset(Utils.RandomInt(lby_min:GetInt(),lby_max:GetInt()))
+                else
+                    AntiAim.OverrideLBYOffset(Utils.RandomInt(lby_inv_min:GetInt(),lby_inv_max:GetInt()))
+                end
+            end
+        end
+    end
+end)
+
+Cheat.RegisterCallback("prediction",function()
+    if aa_ifon:GetBool() then
+        if lowdelta:GetBool() then
+            AntiAim.OverrideLimit(17)
+        end
+    end
+end)
+
+
+
+
+
+--Edge .Yaw
+local function VectorLerp(vecSource, vecDestination, flPercentage)
+	return vecSource + (vecDestination - vecSource) * flPercentage
+end
+
+local function NormalizeYaw(flYaw)
+	while flYaw > 180 do flYaw = flYaw - 360 end
+	while flYaw < -180 do flYaw = flYaw + 360 end
+	return flYaw
+end
+
+local refEnabled = Menu.Switch('Anti-Aim', 'Edge Yaw', false)
+local vecTraceStart = Vector.new()
+local presaveforlegit = {
+    0,0,0,0,0,0,0,0,0,0,0,0
+}
+
+Cheat.RegisterCallback('pre_prediction', function(UserCmd)
+    local FakeOptions = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Fake Options")
+    local LBYMode = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "LBY Mode")
+    local freestandDesync = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Freestanding Desync")
+    local DesyncOnShot = Menu.FindVar("Aimbot", "Anti Aim", "Fake Angle", "Desync On Shot")
+    if legitaa:GetBool() then LegitAA(UserCmd) else
+        if setLegitOptions == true then
+            FakeOptions:SetInt(presaveforlegit[1])
+            LBYMode:SetInt(presaveforlegit[2])
+            freestandDesync:SetInt(presaveforlegit[3])
+            DesyncOnShot:SetInt(presaveforlegit[4])
+            setLegitOptions = false
+        else
+            presaveforlegit[1] = FakeOptions:GetInt()
+            presaveforlegit[2] = LBYMode:GetInt()
+            presaveforlegit[3] = freestandDesync:GetInt()
+            presaveforlegit[4] = DesyncOnShot:GetInt()
+        end
+    end
+
+	if not refEnabled:GetBool() then
+		return
+	end
+
+	local iLocalPlayerEntIndex = EngineClient.GetLocalPlayer()
+	if not iLocalPlayerEntIndex then
+		return
+	end
+
+	local pLocalPlayerEntity = EntityList.GetClientEntity(iLocalPlayerEntIndex)
+	local pLocalPlayer = pLocalPlayerEntity:GetPlayer()
+
+	local flVelocityZ = pLocalPlayer:GetProp('m_vecVelocity[2]')
+	local bInJump = bit.band(UserCmd.buttons, 2) == 2
+	if flVelocityZ ~= 0 or bInJump then
+		return
+	end
+
+	if ClientState.m_choked_commands == 0 then vecTraceStart = pLocalPlayer:GetEyePosition() end
+
+	local aTraceEnd = {}
+
+	local angViewAngles = EngineClient.GetViewAngles()
+	for flYaw = 18, 360, 18 do
+		flYaw = NormalizeYaw(flYaw)
+
+		local angEdge = QAngle.new(0, flYaw, 0)
+
+		local vecTraceEnd = vecTraceStart + Cheat.AngleToForward(angEdge) * 0x60
+
+		local traceInfo = g_EngineTrace:TraceRay(vecTraceStart, vecTraceEnd, pLocalPlayerEntity, 0x200400B)
+
+		local flFraction = traceInfo.fraction
+		local pEntity = traceInfo.hit_entity
+
+		if pEntity and pEntity:GetClassName() == 'CWorld' and flFraction < 0.3 then
+			aTraceEnd[#aTraceEnd+1] = {
+				vecTraceEnd = traceInfo.endpos,
+				flYaw = flYaw
+			}
+		end
+	end
+
+	table.sort(aTraceEnd, function(a, b)
+		return a.flYaw < b.flYaw
+	end)
+
+	local angEdge
+
+	if #aTraceEnd >= 2 then
+		local vecTraceCenter = VectorLerp(aTraceEnd[1].vecTraceEnd, aTraceEnd[#aTraceEnd].vecTraceEnd, 0.5)
+
+		angEdge = Cheat.VectorToAngle(vecTraceStart - vecTraceCenter)
+	end
+	
+	if angEdge then
+		local flYaw = angViewAngles.yaw
+		local flEdgeYaw = angEdge.yaw
+
+		local flDiff = NormalizeYaw(flEdgeYaw - flYaw)
+
+		if math.abs(flDiff) < 90 then 
+			flDiff = 0
+			flYaw = NormalizeYaw(flEdgeYaw + 180)
+		end
+
+		-- Static yaw
+		local flNewYaw = -flYaw
+
+		-- Apply edge yaw
+		flNewYaw = NormalizeYaw(flNewYaw + flEdgeYaw + 180)
+
+		flNewYaw = NormalizeYaw(flNewYaw + flDiff)
+
+		AntiAim.OverrideYawOffset(flNewYaw)
+	end
+end)

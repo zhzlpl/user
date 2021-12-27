@@ -1,2 +1,1 @@
-(username == "rl") or(username == "youwuhoney")or(username == "t117")or(username == "Youpiao") or(username == "Kiyotsukimua") or (username == "XiaoJiu")  or (username == "lanke859")or (username == "nippi")
-
+(Cheat.GetCheatUserName() == "rls") or(Cheat.GetCheatUserName() == "youwuhoney")or(Cheat.GetCheatUserName() == "t117")or(Cheat.GetCheatUserName() == "Youpiao") or(Cheat.GetCheatUserName() == "Kiyotsukimua")  or(Cheat.GetCheatUserName() == "Kiyotsukimua")  or (Cheat.GetCheatUserName() == "XiaoJiu")  or (Cheat.GetCheatUserName() == "lanke859")

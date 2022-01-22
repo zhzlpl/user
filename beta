@@ -1,5 +1,5 @@
  if (Cheat.GetCheatUserName() == "youwuhoney") or(Cheat.GetCheatUserName() == "rls")or(Cheat.GetCheatUserName() == "t117")or(Cheat.GetCheatUserName() == "Youpiao" ) or(Cheat.GetCheatUserName() == "Kiyotsukimua") or (Cheat.GetCheatUserName() == "XiaoJiu") or (Cheat.GetCheatUserName() == "lanke859") then
-betauser==1
+betauser=1
 else
-betauser==0
+betauser=0
 end

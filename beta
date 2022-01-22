@@ -1,4 +1,4 @@
- if (Cheat.GetCheatUserName() == "youwuhoney") or(Cheat.GetCheatUserName() == "rls")or(Cheat.GetCheatUserName() == "t117")or(Cheat.GetCheatUserName() == "Youpiao" ) or(Cheat.GetCheatUserName() == "Kiyotsukimua") or (Cheat.GetCheatUserName() == "XiaoJiu") or (Cheat.GetCheatUserName() == "lanke859) then
+ if (Cheat.GetCheatUserName() == "youwuhoney") or(Cheat.GetCheatUserName() == "rls")or(Cheat.GetCheatUserName() == "t117")or(Cheat.GetCheatUserName() == "Youpiao" ) or(Cheat.GetCheatUserName() == "Kiyotsukimua") or (Cheat.GetCheatUserName() == "XiaoJiu") or (Cheat.GetCheatUserName() == "lanke859") then
 weaponsmode= Menu.Combo	("","Mode",{"Rage", "Semi Rage"}, 0)
 ver=" beta"
 else
